@@ -1,0 +1,94 @@
+version: "3.9"
+
+# Use this instead of docker-compose.yml when you want to run pre-built
+# images from GHCR (published by .github/workflows/docker-build.yml)
+# rather than building locally.
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Pin IMAGE_TAG in .env to a released version (e.g. v1.0.0) for production
+# use; it defaults to "latest" (the most recent main branch build).
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: stock_timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockpass}
+      POSTGRES_DB: ${POSTGRES_DB:-stocks}
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stockuser}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ingestion:
+    image: ghcr.io/${GITHUB_OWNER:-myromeo}/stock-tracker-ingestion:${IMAGE_TAG:-latest}
+    container_name: stock_ingestion
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY}
+      SYMBOLS: ${SYMBOLS:-AAPL,MSFT,GOOGL}
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-stockuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockpass}
+      POSTGRES_DB: ${POSTGRES_DB:-stocks}
+      POLL_INTERVAL_MINUTES: ${POLL_INTERVAL_MINUTES:-15}
+
+  prediction:
+    image: ghcr.io/${GITHUB_OWNER:-myromeo}/stock-tracker-prediction:${IMAGE_TAG:-latest}
+    container_name: stock_prediction
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-stockuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockpass}
+      POSTGRES_DB: ${POSTGRES_DB:-stocks}
+      SYMBOLS: ${SYMBOLS:-AAPL,MSFT,GOOGL}
+      FORECAST_DAYS: ${FORECAST_DAYS:-14}
+      RETRAIN_INTERVAL_HOURS: ${RETRAIN_INTERVAL_HOURS:-6}
+
+  api:
+    image: ghcr.io/${GITHUB_OWNER:-myromeo}/stock-tracker-api:${IMAGE_TAG:-latest}
+    container_name: stock_api
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-stockuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stockpass}
+      POSTGRES_DB: ${POSTGRES_DB:-stocks}
+    ports:
+      - "8000:8000"
+
+  dashboard:
+    image: ghcr.io/${GITHUB_OWNER:-myromeo}/stock-tracker-dashboard:${IMAGE_TAG:-latest}
+    container_name: stock_dashboard
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8501:8501"
+
+volumes:
+  timescale_data:

@@ -28,7 +28,7 @@ Alpha Vantage API
 | `api`        | FastAPI read-only endpoints over the data                         |
 | `dashboard`  | Streamlit UI: price chart + forecast band + recent data table     |
 
-## Setup
+## Quick start (build locally)
 
 1. Get a free Alpha Vantage API key: https://www.alphavantage.co/support/#api-key
 2. Copy the environment template and fill in your key:
@@ -36,12 +36,60 @@ Alpha Vantage API
    cp .env.example .env
    # edit .env: set ALPHA_VANTAGE_API_KEY and SYMBOLS
    ```
-3. Start the stack:
+3. Start the stack, building images locally:
    ```bash
    docker compose up -d --build
    ```
 4. Open the dashboard: http://localhost:8501
    API docs (Swagger UI): http://localhost:8000/docs
+
+## CI: automated image builds (GitHub Actions)
+
+`.github/workflows/docker-build.yml` builds all four service images
+(`ingestion`, `prediction`, `api`, `dashboard`) and publishes them to
+GitHub Container Registry (GHCR) as:
+
+```
+ghcr.io/<owner>/stock-tracker-ingestion
+ghcr.io/<owner>/stock-tracker-prediction
+ghcr.io/<owner>/stock-tracker-api
+ghcr.io/<owner>/stock-tracker-dashboard
+```
+
+It triggers on:
+- pushes to `main` that touch any service directory (tags images `latest` + short commit sha)
+- version tags like `v1.0.0` (tags images `1.0.0` and `1.0`)
+- pull requests (build-only, no push - validates the Dockerfiles still work)
+- manual runs via the Actions tab ("Run workflow")
+
+**No setup needed for the workflow itself** - it authenticates to GHCR
+using the automatically-provided `GITHUB_TOKEN`, which already has
+`packages: write` permission granted in the workflow file. Just push it to
+the repo and it runs.
+
+**One manual step:** the first time each image is published, GHCR makes it
+**private** by default. If you want to `docker compose pull` without
+authenticating, go to your GitHub profile → **Packages**, open each
+`stock-tracker-*` package → **Package settings** → **Change visibility** →
+**Public**. If you're fine keeping them private, `docker login ghcr.io`
+with a personal access token (`read:packages` scope) before pulling instead.
+
+To cut a versioned release: `git tag v1.0.0 && git push --tags`.
+
+## Running from pre-built images
+
+Once the workflow has published images at least once, you can skip local
+builds entirely:
+
+```bash
+cp .env.example .env
+# edit .env: set ALPHA_VANTAGE_API_KEY, SYMBOLS, GITHUB_OWNER, IMAGE_TAG
+docker compose -f docker-compose.prod.yml up -d
+```
+
+`GITHUB_OWNER` should be your GitHub username/org (`myromeo` for this repo).
+`IMAGE_TAG` defaults to `latest`; pin it to a release tag (e.g. `v1.0.0`)
+for anything you want to keep stable.
 
 ## Notes on the free API tier
 
@@ -81,4 +129,8 @@ you have higher rate limits.
 ```bash
 docker compose down          # stop, keep data
 docker compose down -v       # stop and wipe the database volume
+
+# or, if running the prod compose file:
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml down -v
 ```
