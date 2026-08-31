@@ -1,0 +1,74 @@
+name: Build and push images
+
+# Builds the four service images (ingestion, prediction, api, dashboard) and
+# pushes them to GitHub Container Registry (GHCR). Runs on pushes to main,
+# on version tags, and can be triggered manually.
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*.*.*"]
+    paths:
+      - "ingestion/**"
+      - "prediction/**"
+      - "api/**"
+      - "dashboard/**"
+      - ".github/workflows/docker-build.yml"
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  # Images are published as ghcr.io/<owner>/stock-tracker-<service>
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/stock-tracker
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [ingestion, prediction, api, dashboard]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        # Skip login on PRs from forks (no registry write access) - build only, don't push
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}-${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
